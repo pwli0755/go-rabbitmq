@@ -1,0 +1,114 @@
+linters-settings:
+  govet:
+    check-shadowing: false
+    settings:
+      printf:
+        funcs:
+          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
+          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
+          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
+          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
+  golint:
+    min-confidence: 0
+  gocognit: # 函数 认知复杂度 分析
+    # minimal code complexity to report, 30 by default (but we recommend 10-20)
+    min-complexity: 15
+  gocyclo: # 函数 圈复杂度 分析
+    # minimal code complexity to report, 30 by default (but we recommend 10-20)
+    min-complexity: 15
+  maligned:
+    suggest-new: true
+  dupl:
+    threshold: 100
+  goconst:
+    min-len: 2
+    min-occurrences: 4
+  depguard:
+    list-type: blacklist
+    packages:
+      # logging is allowed only by logutils.Log, logrus
+      # is allowed to use only in logutils package
+      - github.com/sirupsen/logrus
+    packages-with-error-messages:
+      github.com/sirupsen/logrus: "logging is allowed only by logutils.Log"
+  nestif:
+    # minimal complexity of if statements to report, 5 by default
+    min-complexity: 6
+  forbidigo:
+    # Forbid the following identifiers
+    forbid:
+#      - fmt.Errorf # consider errors.Errorf in github.com/pkg/errors
+      - fmt.Print.* # too much log noise
+#      - ginkgo\\.F.* # these are used just for local development
+    # Exclude godoc examples from forbidigo checks.  Default is true.
+    exclude_godoc_examples: false
+
+linters:
+  # please, do not use `enable-all`: it's deprecated and will be removed soon.
+  # inverted configuration with `enable-all` and `disable` is not scalable during updates of golangci-lint
+  disable-all: false
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - bodyclose
+    - golint
+    - gosimple
+    - typecheck
+    - varcheck
+    - goconst # Finds repeated strings that could be replaced by a constant
+    - goimports # Goimports does everything that gofmt does. Additionally it checks unused imports
+    - gocognit # 函数 认知复杂度 分析
+    - gocyclo # 函数 圈复杂度 分析
+    - funlen # Tool for detection of long functions
+    - nolintlint # Reports ill-formed or insufficient nolint directives 正确的nolint方式 // nolint:varcheck
+    - unconvert # Remove unnecessary type conversions
+    - nestif # Reports deeply nested if statements
+    - predeclared # find code that shadows one of Go's predeclared identifiers
+    # - unparam # Reports unused function parameters
+    # - gochecknoinits # 适当时机引入: 减少使用init(), 多使用显示初始化
+    # - gosec # Inspects source code for security problems 预留根据实践后的情况再考虑是否添加
+    - forbidigo
+
+
+
+issues:
+  exclude-rules:
+    - path: internal/(cache|renameio)/
+      linters:
+        - lll
+        - gochecknoinits
+        - gocyclo
+        - funlen
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  # disable excluding of issues about comments from golint
+  include:
+    - EXC0002
+
+run:
+  timeout: 10m
+  issues-exit-code: 1
+  # include test files or not, default is true
+  tests: false
+  # list of build tags, all linters use it. Default is empty list.
+  build-tags:
+    - codeanalysis
+  skip-dirs:
+    - vendor
+    - test
+    - docs
+  skip-files:
+    - internal/cache/.*_test.go
+    - .*.pb.go
+    - .*_test.go
+    - blob.go
+    - common/error.go
+    - docs/*.go
+
+# golangci.com configuration
+# https://github.com/golangci/golangci/wiki/Configuration
+service:
+  golangci-lint-version: 1.27.x # use the fixed version to not introduce new linters unexpectedly
+  prepare:
+    - echo "here I can run custom commands, but no preparation needed for this repo"

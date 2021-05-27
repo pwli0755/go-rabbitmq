@@ -22,3 +22,6 @@ install-staticcheck:
 
 staticcheck:
 	staticcheck -f stylish ./...
+
+check:
+	golangci-lint run --issues-exit-code 1
