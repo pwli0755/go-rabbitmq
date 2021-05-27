@@ -300,13 +300,19 @@ func (consumer Consumer) StartConsuming(
 
 	go func() {
 		for err := range consumer.chManager.notifyCancelOrClose {
-			consumer.logger.Printf("consume cancel/close handler triggered. err: %v", err)
-			consumer.startGoroutinesWithRetries(
-				handler,
-				queue,
-				routingKeys,
-				*options,
-			)
+			select {
+			case <-consumer.chManager.done:
+				consumer.logger.Printf("consume exit due to shutdown called")
+				return
+			default:
+				consumer.logger.Printf("consume cancel/close handler triggered. err: %v", err)
+				consumer.startGoroutinesWithRetries(
+					handler,
+					queue,
+					routingKeys,
+					*options,
+				)
+			}
 		}
 	}()
 	return nil
@@ -322,20 +328,26 @@ func (consumer Consumer) startGoroutinesWithRetries(
 ) {
 	backoffTime := time.Second
 	for {
-		consumer.logger.Printf("waiting %s seconds to attempt to start consumer goroutines", backoffTime)
-		time.Sleep(backoffTime)
-		backoffTime *= 2
-		err := consumer.startGoroutines(
-			handler,
-			queue,
-			routingKeys,
-			consumeOptions,
-		)
-		if err != nil {
-			consumer.logger.Printf("couldn't start consumer goroutines. err: %v", err)
-			continue
+		select {
+		case <-consumer.chManager.done:
+			consumer.logger.Printf("consume exit due to shutdown called")
+			return
+		default:
+			consumer.logger.Printf("waiting %s seconds to attempt to start consumer goroutines", backoffTime)
+			time.Sleep(backoffTime)
+			backoffTime *= 2
+			err := consumer.startGoroutines(
+				handler,
+				queue,
+				routingKeys,
+				consumeOptions,
+			)
+			if err != nil {
+				consumer.logger.Printf("couldn't start consumer goroutines. err: %v", err)
+				continue
+			}
+			return
 		}
-		break
 	}
 }
 
@@ -419,19 +431,25 @@ func (consumer Consumer) startGoroutines(
 	for i := 0; i < consumeOptions.Concurrency; i++ {
 		go func() {
 			for msg := range msgs {
-				if consumeOptions.ConsumerAutoAck {
-					handler(Delivery{msg})
-					continue
-				}
-				if handler(Delivery{msg}) {
-					err := msg.Ack(false)
-					if err != nil {
-						consumer.logger.Printf("can't ack message: %v", err)
+				select {
+				case <-consumer.chManager.done:
+					consumer.logger.Printf("consume exit due to shutdown called")
+					return
+				default:
+					if consumeOptions.ConsumerAutoAck {
+						handler(Delivery{msg})
+						continue
 					}
-				} else {
-					err := msg.Nack(false, true)
-					if err != nil {
-						consumer.logger.Printf("can't nack message: %v", err)
+					if handler(Delivery{msg}) {
+						err := msg.Ack(false)
+						if err != nil {
+							consumer.logger.Printf("can't ack message: %v", err)
+						}
+					} else {
+						err := msg.Nack(false, true)
+						if err != nil {
+							consumer.logger.Printf("can't nack message: %v", err)
+						}
 					}
 				}
 			}
@@ -440,4 +458,9 @@ func (consumer Consumer) startGoroutines(
 	}
 	consumer.logger.Printf("Processing messages on %v goroutines", consumeOptions.Concurrency)
 	return nil
+}
+
+// Shutdown ...
+func (consumer *Consumer) Shutdown() {
+	consumer.chManager.shutdown()
 }

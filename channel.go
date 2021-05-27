@@ -12,12 +12,15 @@ type channelManager struct {
 	logger              Logger
 	url                 string
 	channel             *amqp.Channel
+	conn                *amqp.Connection
 	channelMux          *sync.RWMutex
 	notifyCancelOrClose chan error
+	running             bool
+	done                chan struct{}
 }
 
 func newChannelManager(url string, log Logger) (*channelManager, error) {
-	ch, err := getNewChannel(url)
+	conn, ch, err := getNewChannel(url)
 	if err != nil {
 		return nil, err
 	}
@@ -26,23 +29,26 @@ func newChannelManager(url string, log Logger) (*channelManager, error) {
 		logger:              log,
 		url:                 url,
 		channel:             ch,
+		conn:                conn,
 		channelMux:          &sync.RWMutex{},
 		notifyCancelOrClose: make(chan error),
+		running:             true,
+		done:                make(chan struct{}),
 	}
 	go chManager.startNotifyCancelOrClosed()
 	return &chManager, nil
 }
 
-func getNewChannel(url string) (*amqp.Channel, error) {
+func getNewChannel(url string) (*amqp.Connection, *amqp.Channel, error) {
 	amqpConn, err := amqp.Dial(url)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ch, err := amqpConn.Channel()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return ch, err
+	return amqpConn, ch, err
 }
 
 // startNotifyCancelOrClosed listens on the channel's cancelled and closed
@@ -65,6 +71,9 @@ func (chManager *channelManager) startNotifyCancelOrClosed() {
 		chManager.reconnectWithBackoff()
 		chManager.logger.Printf("successfully reconnected to amqp server after cancel")
 		chManager.notifyCancelOrClose <- errors.New(err)
+	case <-chManager.done:
+		chManager.logger.Printf("shutdown called, exit now")
+		return
 	}
 
 	// these channels can be closed by amqp
@@ -85,14 +94,20 @@ func (chManager *channelManager) startNotifyCancelOrClosed() {
 func (chManager *channelManager) reconnectWithBackoff() {
 	backoffTime := time.Second
 	for {
-		chManager.logger.Printf("waiting %s seconds to attempt to reconnect to amqp server", backoffTime)
-		time.Sleep(backoffTime)
-		backoffTime *= 2
-		err := chManager.reconnect()
-		if err != nil {
-			chManager.logger.Printf("error reconnecting to amqp server: %v", err)
-		} else {
+		select {
+		case <-chManager.done:
+			chManager.logger.Printf("shutdown called, exit now")
 			return
+		default:
+			chManager.logger.Printf("waiting %s seconds to attempt to reconnect to amqp server", backoffTime)
+			time.Sleep(backoffTime)
+			backoffTime *= 2
+			err := chManager.reconnect()
+			if err != nil {
+				chManager.logger.Printf("error reconnecting to amqp server: %v", err)
+			} else {
+				return
+			}
 		}
 	}
 }
@@ -101,12 +116,30 @@ func (chManager *channelManager) reconnectWithBackoff() {
 func (chManager *channelManager) reconnect() error {
 	chManager.channelMux.Lock()
 	defer chManager.channelMux.Unlock()
-	newChannel, err := getNewChannel(chManager.url)
+	newConn, newChannel, err := getNewChannel(chManager.url)
 	if err != nil {
 		return err
 	}
-	chManager.channel.Close()
+	errClose := chManager.channel.Close()
+	chManager.conn.Close()
+	if errClose != nil && errClose.Error() != amqp.ErrClosed.Error() {
+		chManager.logger.Printf("reconnect: %s", err.Error())
+		return errClose
+	}
 	chManager.channel = newChannel
+	chManager.conn = newConn
 	go chManager.startNotifyCancelOrClosed()
 	return nil
+}
+
+// shutdown turns off the chManager and close the managed *amqp.Connection
+func (chManager *channelManager) shutdown() {
+	chManager.channelMux.Lock()
+	defer chManager.channelMux.Unlock()
+	if chManager.running {
+		defer chManager.conn.Close()
+		defer chManager.channel.Close()
+		chManager.running = false
+		close(chManager.done)
+	}
 }
