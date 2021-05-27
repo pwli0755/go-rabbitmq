@@ -33,9 +33,9 @@ import "github.com/streadway/amqp"
 type Table map[string]interface{}
 
 func tableToAMQPTable(table Table) amqp.Table {
-	new := amqp.Table{}
+	tbl := amqp.Table{}
 	for k, v := range table {
-		new[k] = v
+		tbl[k] = v
 	}
-	return new
+	return tbl
 }
